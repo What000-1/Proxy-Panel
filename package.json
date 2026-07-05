@@ -1,0 +1,18 @@
+{
+  "name": "proxy-panel",
+  "version": "1.0.0",
+  "description": "Paid proxy/airport subscription tracker with Telegram reminders, deployable to Cloudflare Workers.",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute proxy-panel-db --file=./src/schema.sql",
+    "db:init:remote": "wrangler d1 execute proxy-panel-db --remote --file=./src/schema.sql",
+    "cron:test": "wrangler dev --test-scheduled"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240925.0",
+    "typescript": "^5.6.2",
+    "wrangler": "^3.78.0"
+  }
+}

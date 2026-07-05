@@ -1,0 +1,26 @@
+name = "proxy-panel"
+main = "src/index.ts"
+compatibility_date = "2024-10-01"
+
+# 每天 UTC 01:00（北京时间 09:00）跑一次到期检查
+[triggers]
+crons = ["0 1 * * *"]
+
+# D1 数据库绑定：先执行 wrangler d1 create proxy-panel-db 获得 database_id 后填入
+[[d1_databases]]
+binding = "DB"
+database_name = "proxy-panel-db"
+database_id = "REPLACE_WITH_YOUR_D1_ID"
+
+# 环境变量（非敏感）——可直接改；敏感值请用 `wrangler secret put` 设置
+[vars]
+# 提前多少天开始提醒（逗号分隔）
+REMIND_DAYS = "7,3,1,0"
+# TG 通知使用的时区，仅影响消息里显示的日期
+TIMEZONE = "Asia/Shanghai"
+
+# 需要通过 `wrangler secret put <NAME>` 设置的密钥：
+#   ADMIN_PASSWORD  - 登录密码
+#   SESSION_SECRET  - session 签名密钥（任意长随机串）
+#   TG_BOT_TOKEN    - Telegram Bot Token
+#   TG_CHAT_ID      - 接收提醒的 chat_id（个人或群组）
