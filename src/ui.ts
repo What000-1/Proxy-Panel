@@ -66,7 +66,31 @@ export const HTML_PAGE = /* html */ `<!doctype html>
   }
   .brand h1 { font-size: 20px; margin: 0; letter-spacing: 0.2px; }
   .brand p { margin: 0; color: var(--text-mute); font-size: 12px; }
-  .top-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .top-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .inline-label {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--border);
+    font-size: 12px; color: var(--text-mute);
+  }
+  .inline-label select, .ccy-select {
+    appearance: none; border: 0; outline: 0;
+    background: transparent; color: var(--text);
+    font-size: 13px; font-weight: 600;
+    padding: 2px 18px 2px 4px; cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--text-mute) 50%),
+                      linear-gradient(-45deg, transparent 50%, var(--text-mute) 50%);
+    background-position: right 8px top 55%, right 4px top 55%;
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
+  }
+  .card-icon {
+    flex-shrink: 0; width: 34px; height: 34px; border-radius: 8px;
+    background: var(--bg-2); border: 1px solid var(--border);
+    display: grid; place-items: center; font-size: 16px;
+    overflow: hidden;
+  }
+  .card-icon img { width: 100%; height: 100%; object-fit: contain; }
 
   .btn {
     appearance: none; border: 1px solid var(--border-strong);
@@ -309,12 +333,46 @@ function statusOf(sub) {
 }
 
 // ------------ state ------------
+const COMMON_CURRENCIES = ['CNY','USD','EUR','HKD','JPY','GBP','TWD','KRW','SGD','AUD','CAD','RUB','INR'];
+const CURRENCY_SYMBOL = { CNY:'¥', USD:'$', EUR:'€', HKD:'HK$', JPY:'¥', GBP:'£', TWD:'NT$', KRW:'₩', SGD:'S$', AUD:'A$', CAD:'C$', RUB:'₽', INR:'₹' };
+
 const state = {
   items: [],
   filter: 'all', // all | active | soon | expired | archived
   q: '',
-  editing: null, // subscription or null
+  editing: null,
+  fx: {},               // { code: per_usd }
+  fxUpdatedAt: null,
+  fxSupported: COMMON_CURRENCIES,
+  displayCurrency: localStorage.getItem('pp_display_ccy') || 'CNY',
 };
+
+// 汇率换算：把 amount 从 from 折算到 to，找不到汇率就返回 null
+function convertCurrency(amount, from, to) {
+  if (from === to) return amount;
+  const rf = state.fx[from];
+  const rt = state.fx[to];
+  if (!rf || !rt) return null;
+  // per_usd = 单位货币兑 1 USD 的数量：amount(from) → USD → to
+  return amount * (rt / rf);
+}
+
+function fmtMoney(amount, ccy) {
+  const sym = CURRENCY_SYMBOL[ccy] || '';
+  const n = Math.abs(amount) >= 100 ? amount.toFixed(0) : amount.toFixed(2);
+  return sym + n + (sym ? '' : ' ' + ccy);
+}
+
+function hostnameOf(url) {
+  try { return new URL(url).hostname; } catch { return null; }
+}
+
+function faviconOf(url) {
+  const host = hostnameOf(url);
+  if (!host) return null;
+  // DuckDuckGo 图标服务免 key、无 CORS 限制
+  return 'https://icons.duckduckgo.com/ip3/' + host + '.ico';
+}
 
 // ------------ render: login ------------
 function renderLogin() {
@@ -450,8 +508,25 @@ function renderLogin() {
 // ------------ render: main ------------
 async function load() {
   try {
-    const data = await api('/api/subscriptions');
-    state.items = data.items;
+    const [subs, fx] = await Promise.all([
+      api('/api/subscriptions'),
+      api('/api/fx').catch(() => ({ rates: {}, updated_at: null, supported: COMMON_CURRENCIES })),
+    ]);
+    state.items = subs.items;
+    state.fx = fx.rates || {};
+    state.fxUpdatedAt = fx.updated_at || null;
+    state.fxSupported = (fx.supported && fx.supported.length) ? fx.supported : COMMON_CURRENCIES;
+    // 汇率库为空则触发一次刷新（首次登录）
+    if (Object.keys(state.fx).length === 0) {
+      api('/api/fx/refresh', { method: 'POST' })
+        .then(async () => {
+          const f2 = await api('/api/fx');
+          state.fx = f2.rates || {};
+          state.fxUpdatedAt = f2.updated_at || null;
+          renderMain();
+        })
+        .catch(() => {});
+    }
     renderMain();
   } catch (e) {
     if (e.message !== '未登录') toast(e.message, 'err');
@@ -467,6 +542,16 @@ function renderMain() {
   const wrap = el('div', { class: 'wrap' });
   app.appendChild(wrap);
 
+  // 显示币种下拉
+  const ccySelect = el('select', {
+    class: 'ccy-select',
+    onchange: (e) => {
+      state.displayCurrency = e.target.value;
+      localStorage.setItem('pp_display_ccy', state.displayCurrency);
+      renderMain();
+    },
+  }, ...state.fxSupported.map(c => el('option', { value: c, ...(c === state.displayCurrency ? { selected: true } : {}) }, c)));
+
   // header
   wrap.appendChild(el('header', { class: 'top' },
     el('div', { class: 'brand' },
@@ -477,8 +562,10 @@ function renderMain() {
       )
     ),
     el('div', { class: 'top-actions' },
+      el('label', { class: 'inline-label' }, el('span', {}, '显示币种'), ccySelect),
       el('button', { class: 'btn ghost', onclick: testTelegram }, '📨 测试 TG'),
-      el('button', { class: 'btn ghost', onclick: runCron }, '🔔 立即检查提醒'),
+      el('button', { class: 'btn ghost', onclick: runCron }, '🔔 立即检查'),
+      el('button', { class: 'btn ghost', onclick: refreshFx }, '💱 汇率'),
       el('button', { class: 'btn ghost', onclick: logout }, '退出'),
       el('button', { class: 'btn primary', onclick: () => openEditor(null) }, '＋ 添加机场'),
     )
@@ -488,13 +575,26 @@ function renderMain() {
   const active = state.items.filter(s => !s.archived);
   const soon = active.filter(s => { const d = daysUntil(s.expiry_date); return d >= 0 && d <= 7; });
   const expired = active.filter(s => daysUntil(s.expiry_date) < 0);
-  const monthly = active.reduce((sum, s) => sum + (s.price * 30 / s.cycle_days), 0);
+  const D = state.displayCurrency;
+  let monthly = 0, missing = 0;
+  for (const s of active) {
+    const permonth = s.price * 30 / s.cycle_days;
+    const conv = convertCurrency(permonth, s.currency, D);
+    if (conv == null) missing++;
+    else monthly += conv;
+  }
+  const monthlyLabel = fmtMoney(monthly, D) + (missing ? ' *' : '');
+  const monthlySub = missing
+    ? ('按周期折算 · ' + missing + ' 条汇率缺失')
+    : (state.fxUpdatedAt
+        ? ('按 ' + D + ' 折算 · 汇率 ' + state.fxUpdatedAt.slice(0, 10))
+        : ('按 ' + D + ' 折算'));
 
   wrap.appendChild(el('div', { class: 'stats' },
     statCard('总订阅', active.length, '个活跃机场'),
     statCard('即将到期', soon.length, '未来 7 天内'),
     statCard('已过期', expired.length, '待处理'),
-    statCard('月均支出', monthly.toFixed(2), '按周期折算'),
+    statCard('月均支出', monthlyLabel, monthlySub),
   ));
 
   // toolbar
@@ -564,20 +664,43 @@ function renderList(container) {
 function renderCard(sub) {
   const st = statusOf(sub);
   const urlEl = sub.url
-    ? el('a', { class: 'url', href: sub.url, target: '_blank', rel: 'noopener' }, '🔗 ' + sub.url)
+    ? el('a', { class: 'url', href: sub.url, target: '_blank', rel: 'noopener' }, sub.url)
     : el('div', { class: 'url', style: 'opacity:.5' }, '— 未填写链接 —');
+
+  // favicon：抓不到会 onerror 隐藏，占位保留一个飞机图标
+  const icon = el('div', { class: 'card-icon' }, '✈');
+  const fav = faviconOf(sub.url);
+  if (fav) {
+    const img = el('img', {
+      src: fav, alt: '',
+      onload: () => { icon.textContent = ''; icon.appendChild(img); },
+      onerror: () => {},
+    });
+  }
+
+  // 价格换算
+  const D = state.displayCurrency;
+  const priceStr = fmtMoney(sub.price, sub.currency) + ' / ' + sub.cycle_days + ' 天';
+  const conv = convertCurrency(sub.price, sub.currency, D);
+  const convStr = (conv != null && sub.currency !== D) ? '≈ ' + fmtMoney(conv, D) : null;
 
   return el('div', { class: 'card' },
     el('div', { class: 'top-row' },
-      el('div', {},
-        el('div', { class: 'name' }, sub.name),
-        urlEl
+      el('div', { style: 'display:flex;gap:10px;align-items:flex-start;min-width:0;flex:1' },
+        icon,
+        el('div', { style: 'min-width:0;flex:1' },
+          el('div', { class: 'name' }, sub.name),
+          urlEl,
+        ),
       ),
       el('span', { class: 'badge ' + st.kind }, st.text),
     ),
     el('div', { class: 'kv' },
       el('div', { class: 'k' }, '价格'),
-      el('div', { class: 'v' }, sub.price + ' ' + sub.currency + ' / ' + sub.cycle_days + ' 天'),
+      el('div', { class: 'v' },
+        priceStr,
+        convStr ? el('div', { style: 'color:var(--text-mute);font-weight:400;font-size:11px' }, convStr) : null,
+      ),
       el('div', { class: 'k' }, '到期日'),
       el('div', { class: 'v' }, sub.expiry_date),
       el('div', { class: 'k' }, '购买日'),
@@ -608,7 +731,11 @@ function openEditor(sub) {
     name: el('input', { value: s.name || '', required: true, placeholder: '例如：机场A' }),
     url: el('input', { value: s.url || '', placeholder: 'https://example.com/user' }),
     price: el('input', { type: 'number', step: '0.01', min: '0', value: s.price ?? 0 }),
-    currency: el('input', { value: s.currency || 'CNY', placeholder: 'CNY / USD…' }),
+    currency: el('select', {},
+      ...state.fxSupported.map(c => el('option', {
+        value: c, ...((s.currency || 'CNY') === c ? { selected: true } : {}),
+      }, c))
+    ),
     cycle_days: el('input', { type: 'number', min: '1', value: s.cycle_days || 30 }),
     purchase_date: el('input', { type: 'date', value: s.purchase_date || todayISO() }),
     expiry_date: el('input', { type: 'date', value: s.expiry_date || '' }),
@@ -736,6 +863,17 @@ async function runCron() {
   try {
     const r = await api('/api/cron/run', { method: 'POST' });
     toast('检查完成：发送 ' + r.notified + '，跳过 ' + r.skipped);
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function refreshFx() {
+  try {
+    const r = await api('/api/fx/refresh', { method: 'POST' });
+    const fx = await api('/api/fx');
+    state.fx = fx.rates || {};
+    state.fxUpdatedAt = fx.updated_at || null;
+    toast('汇率已更新（' + r.updated + ' 条）');
+    renderMain();
   } catch (e) { toast(e.message, 'err'); }
 }
 

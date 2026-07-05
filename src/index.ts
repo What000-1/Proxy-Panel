@@ -344,6 +344,58 @@ async function apiRenew(id: number, req: Request, env: Env): Promise<Response> {
   return json({ ok: true, expiry_date: newExpiry, last_renewed: on });
 }
 
+// ---------- FX 汇率 ----------
+
+const FX_SUPPORTED = [
+  "CNY", "USD", "EUR", "HKD", "JPY", "GBP", "TWD", "KRW", "SGD", "AUD", "CAD", "RUB", "INR",
+];
+
+async function fetchFxRates(env: Env): Promise<{ updated: number }> {
+  // 免费、无需 key、每日刷新
+  const resp = await fetch("https://open.er-api.com/v6/latest/USD", {
+    headers: { "user-agent": "proxy-panel/1.0" },
+  });
+  if (!resp.ok) throw new Error(`FX HTTP ${resp.status}`);
+  const data = (await resp.json()) as { result?: string; rates?: Record<string, number> };
+  if (data.result !== "success" || !data.rates) throw new Error("FX 响应无效");
+
+  const now = new Date().toISOString();
+  const stmt = env.DB.prepare(
+    "INSERT INTO fx_rates (code, per_usd, updated_at) VALUES (?, ?, ?) " +
+      "ON CONFLICT(code) DO UPDATE SET per_usd = excluded.per_usd, updated_at = excluded.updated_at",
+  );
+  // 保底一条 USD=1
+  const batch: D1PreparedStatement[] = [stmt.bind("USD", 1, now)];
+  for (const [code, rate] of Object.entries(data.rates)) {
+    if (typeof rate !== "number" || !isFinite(rate) || rate <= 0) continue;
+    batch.push(stmt.bind(code, rate, now));
+  }
+  await env.DB.batch(batch);
+  return { updated: batch.length };
+}
+
+async function apiFx(env: Env): Promise<Response> {
+  const { results } = await env.DB.prepare(
+    "SELECT code, per_usd, updated_at FROM fx_rates",
+  ).all<{ code: string; per_usd: number; updated_at: string }>();
+  const rates: Record<string, number> = {};
+  let updatedAt: string | null = null;
+  for (const r of results ?? []) {
+    rates[r.code] = r.per_usd;
+    if (!updatedAt || r.updated_at > updatedAt) updatedAt = r.updated_at;
+  }
+  return json({ ok: true, rates, updated_at: updatedAt, supported: FX_SUPPORTED });
+}
+
+async function apiFxRefresh(env: Env): Promise<Response> {
+  try {
+    const r = await fetchFxRates(env);
+    return json({ ok: true, ...r });
+  } catch (e) {
+    return bad(`汇率刷新失败: ${(e as Error).message}`, 500);
+  }
+}
+
 async function apiTestTg(env: Env): Promise<Response> {
   if (!env.TG_BOT_TOKEN || !env.TG_CHAT_ID)
     return bad("尚未配置 TG_BOT_TOKEN / TG_CHAT_ID（用 wrangler secret put 设置）");
@@ -609,8 +661,13 @@ async function handle(req: Request, env: Env): Promise<Response> {
 
     if (p === "/api/telegram/test" && req.method === "POST") return apiTestTg(env);
 
+    if (p === "/api/fx" && req.method === "GET") return apiFx(env);
+    if (p === "/api/fx/refresh" && req.method === "POST") return apiFxRefresh(env);
+
     if (p === "/api/cron/run" && req.method === "POST") {
       const r = await runReminderCheck(env);
+      // 顺带刷新汇率，忽略失败
+      try { await fetchFxRates(env); } catch (e) { console.error("fx refresh failed", e); }
       return json({ ok: true, ...r });
     }
 
@@ -634,10 +691,20 @@ export default {
 
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
-      runReminderCheck(env).then(
-        (r) => console.log(`reminder: notified=${r.notified} skipped=${r.skipped}`),
-        (e) => console.error("reminder failed", e),
-      ),
+      (async () => {
+        try {
+          const r = await runReminderCheck(env);
+          console.log(`reminder: notified=${r.notified} skipped=${r.skipped}`);
+        } catch (e) {
+          console.error("reminder failed", e);
+        }
+        try {
+          const r = await fetchFxRates(env);
+          console.log(`fx refreshed: ${r.updated} rates`);
+        } catch (e) {
+          console.error("fx refresh failed", e);
+        }
+      })(),
     );
   },
 };

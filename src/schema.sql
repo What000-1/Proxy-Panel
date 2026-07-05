@@ -32,6 +32,14 @@ CREATE TABLE IF NOT EXISTS login_codes (
 CREATE INDEX IF NOT EXISTS idx_login_codes_expires ON login_codes(expires_at);
 
 
+-- 汇率表：每日 Cron 从 open.er-api.com 拉取，per_usd = 1 USD 对应多少该币种
+CREATE TABLE IF NOT EXISTS fx_rates (
+  code       TEXT PRIMARY KEY,
+  per_usd    REAL NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+
 CREATE TABLE IF NOT EXISTS reminder_log (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   subscription_id INTEGER NOT NULL,

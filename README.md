@@ -7,6 +7,8 @@
 - 一键续费（自动顺延到期日、记录续费日期）
 - 状态一眼看清：正常 / 即将到期 / 已过期 / 已归档
 - 搜索、筛选、月均支出统计
+- **多币种自动换算**：13 种主流币种（CNY / USD / EUR / HKD / JPY / GBP / TWD / KRW / SGD / AUD / CAD / RUB / INR），每日自动拉汇率，面板可切换「显示币种」，月均支出和单卡价格实时换算
+- **机场链接 favicon 自动抓取**：填了 URL 就自动显示图标，用的是 DuckDuckGo 免 key 图标服务
 - **Telegram Bot 到期自动提醒**：Cron 每日检查，提前 7 / 3 / 1 / 0 天推送，去重防打扰
 - **登录两步验证**：先输入密码 → TG 收到一次性验证码（含登录 IP / 设备 / 时间）→ 输入验证码进入面板
 - 现代玻璃拟态 UI，自动跟随系统深色模式，移动端友好
@@ -95,7 +97,7 @@ git push -u origin main
 
 1. 打开 <https://dash.cloudflare.com/> → 左侧 **Storage & Databases** → **D1 SQL Database** → **Create database**。
 2. 名字填 **`proxy-panel-db`**（必须一致，否则要同步改 `wrangler.toml`），点 Create。
-3. 进入新建的数据库 → 顶部 **Console** 标签页 → 打开本项目 `src/schema.sql`，把里面 SQL **全部内容**粘进去 → **Execute**。执行成功后 `Tables` 里应该能看到 `subscriptions` / `reminder_log` / `login_codes` 三张表。
+3. 进入新建的数据库 → 顶部 **Console** 标签页 → 打开本项目 `src/schema.sql`，把里面 SQL **全部内容**粘进去 → **Execute**。执行成功后 `Tables` 里应该能看到 `subscriptions` / `reminder_log` / `login_codes` / `fx_rates` 四张表。
 
 ### 3. 创建 Worker 并绑定 GitHub 仓库
 
@@ -193,3 +195,25 @@ TG_CHAT_ID=
 - 命中 `REMIND_DAYS` 的记录发送一次 HTML 消息，写入 `reminder_log`。
 - 同一到期日 + 同一天数窗口只发一次，续费后 `expiry_date` 变化，下一轮周期会重新提醒。
 - 已过期条目会按 0 天窗口继续每次续费前保留一次提醒。
+
+## 六、多币种换算 & Favicon
+
+### 多币种自动换算
+
+- **汇率来源**：<https://open.er-api.com/v6/latest/USD>（免费、无需 key，每日更新）。
+- **刷新时机**：
+  - 每天 Cron（`0 1 * * *`）触发时自动刷新一次；
+  - 面板顶部点「💱 汇率」立即拉取一次；
+  - 首次登录若 `fx_rates` 表为空，会自动触发一次刷新。
+- **换算规则**：`fx_rates.per_usd = 1 USD 对应多少该币种`。金额换算 = `amount * (per_usd[目标] / per_usd[来源])`。
+- **UI 表现**：
+  - 页面顶部有「显示币种」下拉，切换后所有卡片和「月均支出」实时换算，选择记在 `localStorage`，下次进入自动记住。
+  - 每张卡片显示原币价格，若与显示币种不同，下方用灰字显示 `≈ 换算价格`。
+  - 若某个币种当天没拉到汇率，「月均支出」值旁会出现 `*`，副标提示「N 条汇率缺失」。
+- **支持币种**：`CNY / USD / EUR / HKD / JPY / GBP / TWD / KRW / SGD / AUD / CAD / RUB / INR`，可在 `src/index.ts` 的 `FX_SUPPORTED` 与 `src/ui.ts` 的 `COMMON_CURRENCIES` 增删。
+
+### Favicon 自动抓取
+
+- 添加机场时填了 URL，卡片左侧就会显示对应网站图标；抓不到自动退回一个飞机 emoji 占位。
+- 图标源：`https://icons.duckduckgo.com/ip3/<hostname>.ico`（免 key、无 CORS）。
+- 完全前端行为，不占用 Worker CPU、不写 D1、不需要额外配置。
