@@ -275,7 +275,8 @@ async function api(path, options = {}) {
   const data = await r.json().catch(() => ({}));
   if (!r.ok || data.ok === false) {
     const msg = data.error || ('HTTP ' + r.status);
-    if (r.status === 401 && path !== '/login') {
+    // 登录相关接口的 401 让调用方就地展示错误，不要重置到密码步骤
+    if (r.status === 401 && !path.startsWith('/login')) {
       renderLogin();
       throw new Error('未登录');
     }
@@ -332,9 +333,9 @@ function renderLogin() {
   // 第二步：验证码
   const codeStep = el('div', { style: 'display:none' });
   const codeInput = el('input', {
-    type: 'text', inputmode: 'numeric', maxlength: '6',
-    placeholder: '6 位数字验证码',
-    style: 'letter-spacing:6px;text-align:center;font-size:18px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace',
+    type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code',
+    maxlength: '12', placeholder: '请输入 TG 收到的验证码',
+    style: 'letter-spacing:4px;text-align:center;font-size:18px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace',
   });
   const codeBtn = el('button', { class: 'btn primary', onclick: doVerify }, '登录');
   const backBtn = el('button', { class: 'btn ghost', onclick: reset, style: 'margin-top:8px;width:100%;justify-content:center' }, '← 返回上一步');
@@ -403,8 +404,14 @@ function renderLogin() {
 
   async function doVerify() {
     if (!challengeId) return;
-    const code = codeInput.value.trim();
-    if (!/^\d{4,8}$/.test(code)) { showErr('请输入验证码'); return; }
+    // 兼容 IME/复制粘贴带来的空白和全角数字
+    // 归一化：去掉所有空白/零宽/BOM，把全角数字转半角，再 trim
+    const stripRe = new RegExp('[\\s\\u200B\\u200C\\u200D\\uFEFF]', 'g');
+    const code = String(codeInput.value || '')
+      .replace(stripRe, '')
+      .replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xFEE0))
+      .trim();
+    if (!code) { showErr('请输入验证码'); return; }
     codeBtn.disabled = true; codeBtn.textContent = '验证中…';
     try {
       await api('/login/verify', { method: 'POST', body: { challenge_id: challengeId, code } });
@@ -418,9 +425,7 @@ function renderLogin() {
 
   passInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doPassword(); });
   codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doVerify(); });
-  codeInput.addEventListener('input', (e) => {
-    e.target.value = e.target.value.replace(/\D/g, '');
-  });
+  // 不再在 input 事件里粗暴过滤字符（会把全角/IME 输入吞掉），仅在提交时归一化
 
   codeStep.appendChild(codeInput);
   codeStep.appendChild(countdown);

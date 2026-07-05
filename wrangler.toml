@@ -10,7 +10,7 @@ crons = ["0 1 * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "proxy-panel-db"
-database_id = "REPLACE_WITH_YOUR_D1_ID"
+database_id = "901e2f3e-ab0c-4179-801a-cbd26fa4df1a"
 
 # 环境变量（非敏感）——可直接改；敏感值请用 `wrangler secret put` 设置
 [vars]
